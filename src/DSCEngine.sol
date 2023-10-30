@@ -55,7 +55,7 @@ contract DSCEngine is ReentrancyGuard {
     /////////////////
     error DSCEngine__NeedsMoreThanZero();
     error DSCEngine__TokenAddressesAndPriceFeedAddressesMustBeSameLength();
-    error DSCEngine_NotAllowedToken();
+    error DSCEngine__NotAllowedToken();
     error DSCEngine__TransferFailed();
     error DSCEngine__BreaksHealthFactor(uint256 userHealthFactor);
     error DSCEngine__MintFailed();
@@ -102,7 +102,7 @@ contract DSCEngine is ReentrancyGuard {
 
     modifier isAllowedToken(address token) {
         if(s_priceFeeds[token] == address(0)){
-            revert DSCEngine_NotAllowedToken();
+            revert DSCEngine__NotAllowedToken();
         }
         _;
     }
@@ -127,9 +127,12 @@ contract DSCEngine is ReentrancyGuard {
         i_dsc = DecentralizedStableCoin(dscAddress);
     }
 
-    //////////////////////////
-    // External Functions  ///
-    //////////////////////////
+    
+    ////////////////////////////////////////////
+    ////////////////////////////////////////////
+    // External & Public View & Pure Functions
+    ////////////////////////////////////////////
+    ////////////////////////////////////////////
 
     /*
      * @param tokenCollateralAddress: The ERC20 token address of the collateral you're depositing
@@ -199,8 +202,7 @@ contract DSCEngine is ReentrancyGuard {
 
     function redeemCollateralForDsc(address tokenCollateralAddress, uint256 amountCollateral, uint256 amountDscToBurn)
         external
-       moreThanZero(amountCollateral)
-       nonReentrant
+       moreThanZero(amountCollateral)   
     {
         burnDsc(amountDscToBurn);
         redeemCollateral(tokenCollateralAddress, amountCollateral);
@@ -272,23 +274,176 @@ contract DSCEngine is ReentrancyGuard {
 
     }
 
-
     
+    function getAccountCollateralValue(address user) public view returns (uint256 totalCollateralValueInUsd) {
+        //looop through each collateral token, get the amount they have deposited,
+        //and map it to the price, to get the USD value
+        for (uint256 index = 0; index < s_collateralTokens.length; index++) {
+            address token = s_collateralTokens[index];
+            uint256 amount = s_collateralDeposited[user][token];
+            totalCollateralValueInUsd += getUsdValue(token, amount);
+        }
+        return totalCollateralValueInUsd;
+     }
 
-
-    
-
-    function getHealthFactor(address user) external view returns (uint256) {
-        //return _healthFactor(user);
+    function getUsdValue(
+        address token,
+        uint256 amount // in WEI
+    ) public view returns (uint256) {
+        return _getUsdValue(token, amount);
     }
 
+    function getTokenAmountFromUsd(address token, uint256 usdAmountInWei) public view returns (uint256) {
+        AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[token]);
+        (, int256 price,,,) = priceFeed.latestRoundData();
+        // $100e18 USD Debt
+        // 1 ETH = 2000 USD
+        // The returned value from Chainlink will be 2000 * 1e8
+        // Most USD pairs have 8 decimals, so we will just pretend they all do
+        return ((usdAmountInWei * PRECISION) / (uint256(price) * ADDITIONAL_FEED_PRECISION));
+    }
 
-    ////////////////////////////////////
-    // Private & Internal View Functions  ///
-    ////////////////////////////////////
+    function getAccountInformation(address user) external view returns(uint256 totalDscMinted, uint256 collateralValueInUsd){
+        (totalDscMinted, collateralValueInUsd) = _getAccountInformation(user);
+    }
+
+    function getPrecision() external pure returns (uint256) {
+        return PRECISION;
+    }
+
+    function getAdditionalFeedPrecision() external pure returns (uint256) {
+        return ADDITIONAL_FEED_PRECISION;
+    }
+
+    function getLiquidationThreshold() external pure returns (uint256) {
+        return LIQUIDATION_THRESHOLD;
+    }
+
+    function getLiquidationBonus() external pure returns (uint256) {
+        return LIQUIDATION_BONUS;
+    }
+
+    function getLiquidationPrecision() external pure returns (uint256) {
+        return LIQUIDATION_PRECISION;
+    }
+
+    function getMinHealthFactor() external pure returns (uint256) {
+        return MIN_HEALTH_FACTOR;
+    }
+
+    function getCollateralTokens() external view returns (address[] memory) {
+        return s_collateralTokens;
+    }
+
+    function getCollateralBalanceOfUser(address user, address token) external view returns (uint256) {
+        return s_collateralDeposited[user][token];
+    }
+
+    function getDsc() external view returns (address) {
+        return address(i_dsc);
+    }
+
+    function getCollateralTokenPriceFeed(address token) external view returns (address) {
+        return s_priceFeeds[token];
+    }
+
+    function getHealthFactor(address user) external view returns (uint256) {
+        return _healthFactor(user);
+    }
+
+    function calculateHealthFactor(uint256 totalDscMinted, uint256 collateralValueInUsd)
+        external
+        pure
+        returns (uint256)
+    {
+        return _calculateHealthFactor(totalDscMinted, collateralValueInUsd);
+    }
+
+    ////////////////////////////////////////////
+    ////////////////////////////////////////////
+    // Internal & Private View & Pure Functions
+    ////////////////////////////////////////////
+    ////////////////////////////////////////////
 
 
+function _getUsdValue(address token, uint256 amount) private view returns (uint256) {
+        AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[token]);
+        (, int256 price,,,) = priceFeed.latestRoundData();
+        // 1 ETH = 1000 USD
+        // The returned value from Chainlink will be 1000 * 1e8
+        // Most USD pairs have 8 decimals, so we will just pretend they all do -
+        // We want to have everything in terms of WEI, so we add 10 zeros at the end
+        return ((uint256(price) * ADDITIONAL_FEED_PRECISION) * amount) / PRECISION;
+    }
 
+    function _calculateHealthFactor(uint256 totalDscMinted, uint256 collateralValueInUsd)
+        internal
+        pure
+        returns (uint256)
+    {
+        if (totalDscMinted == 0) return type(uint256).max; //if what you owe is 0, then your health factor is like max max
+        //$1000 of ETH * 50 = 50,000 / 100 = 500
+
+        //so if we deposit $1000 collateral, 50 threshold means 50/100 = 1/2, that leaves us with $500
+        //if we now do 500/100 that we borrowed, we have 5 as the health factor
+        //this simply means our collateral is divided into 2, and as such we must provide 
+        //200% of our debt so that when it is divided we will still have HF of 1 or higher
+
+
+        //E.G 2
+        //$150 of ETH * 50 = 7,500 / 100 = (75 / 100 ) < 1
+        //we provide collateral of $150 and borrow $100 DSC, 
+        //with our 50 threshold, it means 50/100 = 1/2 = 0.5 
+        //that is $150 * 0.5 = $75
+        //now $75/$100 DSC = 0.75 
+        //this is lower than 1, so health factor breaks
+        //so to be safe, we must privide collateral of 200% in value higher than =our borrowed DSC
+
+        //e.g 2 
+        //lets say the collateralUsdValue is $1000 and totalDscMinted is 100
+        //$1000 ETH / 1000 DSC
+        //1000 * 50 = 50,000 / 100 = (500 / 100) > 1
+
+        //
+        uint256 collateralAdjustedForThreshold = (collateralValueInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
+        return (collateralAdjustedForThreshold * PRECISION) / totalDscMinted;
+    }
+    
+    /**
+     * 
+     * @dev Low-level internal function, do not call unless the function calling
+     * it is checking for health factor being broken
+     */
+      function _burnDsc(uint256 amountDscToBurn, address onBehalfOf, address dscFrom) private {
+        s_DSCMinted[onBehalfOf] -= amountDscToBurn;
+
+        bool success = i_dsc.transferFrom(dscFrom, address(this), amountDscToBurn);
+        // This conditional is hypothetically unreachable
+        if (!success) {
+            revert DSCEngine__TransferFailed();
+        }
+        i_dsc.burn(amountDscToBurn);
+    }
+    /*
+     * 
+     * @Notice this was a bit modified to not actually burn, so to test that price is not set to 0
+     * there by not making health factor go to 0
+     * with this _burn2 the health factor is actually improved
+     * 
+     * @Notice: This function should be deleted for production code
+     */
+    function _burnDsc2(uint256 amountDscToBurn, address onBehalfOf, address dscFrom) external {
+        s_DSCMinted[onBehalfOf] -= amountDscToBurn;
+
+        bool success = i_dsc.transferFrom(dscFrom, address(this), amountDscToBurn);
+        // This conditional is hypothetically unreachable
+        if (!success) {
+            revert DSCEngine__TransferFailed();
+        }
+        //i_dsc.burn(amountDscToBurn); //if i dont do this, the price wont be set to 0
+    }
+
+    
     function _getAccountInformation(address user)
         private
         view
@@ -305,6 +460,9 @@ contract DSCEngine is ReentrancyGuard {
         //total dsc minted
         //total collateral value
         (uint256 totalDscMinted, uint256 collateralValueInUsd) = _getAccountInformation(user);
+        //(collateralValueInUsd / totalDscMinted) e.g 150 collateral / 100 dsc = 1.5 
+        //but decimals doesnt work here so it would be 1
+        //so we need to find a way to get the value with precision 
         return _calculateHealthFactor(totalDscMinted, collateralValueInUsd);
     }
 
@@ -330,88 +488,23 @@ contract DSCEngine is ReentrancyGuard {
         }
     }
 
-
-     ///////////////////////////////////////////
-    ////////////////////////////////////////////
-    // External & Public View & Pure Functions
-    ////////////////////////////////////////////
-    ////////////////////////////////////////////
-     function getAccountCollateralValue(address user) public view returns (uint256 totalCollateralValueInUsd) {
-        //looop through each collateral token, get the amount they have deposited,
-        //and map it to the price, to get the USD value
-        for (uint256 index = 0; index < s_collateralTokens.length; index++) {
-            address token = s_collateralTokens[index];
-            uint256 amount = s_collateralDeposited[user][token];
-            totalCollateralValueInUsd += getUsdValue(token, amount);
-        }
-        return totalCollateralValueInUsd;
-     }
-
-     function getUsdValue(
-        address token,
-        uint256 amount // in WEI
-    ) public view returns (uint256) {
-        return _getUsdValue(token, amount);
-    }
-
-    function getTokenAmountFromUsd(address token, uint256 usdAmountInWei) public view returns (uint256) {
-        AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[token]);
-        (, int256 price,,,) = priceFeed.latestRoundData();
-        // $100e18 USD Debt
-        // 1 ETH = 2000 USD
-        // The returned value from Chainlink will be 2000 * 1e8
-        // Most USD pairs have 8 decimals, so we will just pretend they all do
-        return ((usdAmountInWei * PRECISION) / (uint256(price) * ADDITIONAL_FEED_PRECISION));
-    }
-
-
-     ///////////////////////////////////////////
-    ////////////////////////////////////////////
-    // Internal & Private View & Pure Functions
-    ////////////////////////////////////////////
-    ////////////////////////////////////////////
-
-
-function _getUsdValue(address token, uint256 amount) private view returns (uint256) {
-        AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[token]);
-        (, int256 price,,,) = priceFeed.latestRoundData();
-        // 1 ETH = 1000 USD
-        // The returned value from Chainlink will be 1000 * 1e8
-        // Most USD pairs have 8 decimals, so we will just pretend they all do -
-        // We want to have everything in terms of WEI, so we add 10 zeros at the end
-        return ((uint256(price) * ADDITIONAL_FEED_PRECISION) * amount) / PRECISION;
-    }
-
-     function _calculateHealthFactor(uint256 totalDscMinted, uint256 collateralValueInUsd)
-        internal
-        pure
-        returns (uint256)
-    {
-        if (totalDscMinted == 0) return type(uint256).max;
-        //$1000 of ETH * 50 = 50,000 / 100 = 500
-        //$150 of ETH * 50 = 7,500 / 100 = (75 / 100 ) < 1
-
-        //e.g 2 
-        //lets say the collateralUsdValue is $1000 and totalDscMinted is 100
-        //$1000 ETH / 1000 DSC
-        //1000 * 50 = 50,000 / 100 = (500 / 100) > 1
-        uint256 collateralAdjustedForThreshold = (collateralValueInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
-        return (collateralAdjustedForThreshold * PRECISION) / totalDscMinted;
-    }
-    
-    /**
+    /*
      * 
-     * @dev Low-level internal function, do not call unless the function calling
-     * it is checking for health factor being broken
+     * @Notice this was deuplicated so we can make this low-level call in the test to see the data changes without
+     * changing the catual function to external. 
+     * 
+     * @Notice: This function should be deleted for production code
      */
-      function _burnDsc(uint256 amountDscToBurn, address onBehalfOf, address dscFrom) private {
-        s_DSCMinted[onBehalfOf] -= amountDscToBurn;
-
-        bool success = i_dsc.transferFrom(dscFrom, address(this), amountDscToBurn);
-        // This conditional is hypothetically unreachable
+    function _redeemCollateral2(address tokenCollateralAddress, uint256 amountCollateral, address from, address to)
+        external
+    {
+        s_collateralDeposited[from][tokenCollateralAddress] -= amountCollateral;
+        emit CollateralRedeemed(from, to, tokenCollateralAddress, amountCollateral);
+        
+        bool success = IERC20(tokenCollateralAddress).transfer(to, amountCollateral);
         if (!success) {
             revert DSCEngine__TransferFailed();
         }
-        i_dsc.burn(amountDscToBurn);
     }
+
 }
