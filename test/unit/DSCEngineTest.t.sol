@@ -657,12 +657,12 @@ contract DSCEngineTest is Test {
      modifier liquidated() {
         vm.startPrank(Alice);
         ERC20Mock(weth).approve(address(engine), AMOUNT_COLLATERAL);
-        engine.depositCollateralAndMintDsc(weth, AMOUNT_COLLATERAL, DSC_AMOUNT_TO_MINT);
+        engine.depositCollateralAndMintDsc(weth, AMOUNT_COLLATERAL, DSC_AMOUNT_TO_MINT); //Debt is $50, collateral of $20,000
         vm.stopPrank();
         int256 ethUsdUpdatedPrice = 9e8; // 1 ETH = $9
 
         MockV3Aggregator(ethUsdPriceFeed).updateAnswer(ethUsdUpdatedPrice);
-        uint256 userHealthFactor = engine.getHealthFactor(Alice);
+        uint256 userHealthFactor = engine.getHealthFactor(Alice); //Debt is $50, collateral of $90
 
         uint256 collateralToCover = 50 ether; //$50
         ERC20Mock(weth).mint(Liquidator, collateralToCover);
@@ -676,6 +676,14 @@ contract DSCEngineTest is Test {
         _;
     }
 
+    function testLiquidationPayoutIsCorrect() public liquidated {
+        uint256 liquidatorWethBalance = ERC20Mock(weth).balanceOf(Liquidator);
+        uint256 expectedWeth = engine.getTokenAmountFromUsd(weth, DSC_AMOUNT_TO_MINT)
+            + (engine.getTokenAmountFromUsd(weth, DSC_AMOUNT_TO_MINT) / engine.getLiquidationBonus());
+        uint256 hardCodedExpected = 6111111111111111110; //6.11111111 ETH ==> 5.555555555555 + (0.1*5.55555555555)
+        assertEq(liquidatorWethBalance, hardCodedExpected);
+        assertEq(liquidatorWethBalance, expectedWeth);
+    }
 
     function testLiquidatorTakesOnUsersDebt() public liquidated {
         (uint256 liquidatorDscMinted,) = engine.getAccountInformation(Liquidator);
@@ -686,6 +694,30 @@ contract DSCEngineTest is Test {
         (uint256 userDscMinted,) = engine.getAccountInformation(Alice);
         assertEq(userDscMinted, 0);
     }
+
+
+    function testUserStillHasSomeEthAfterLiquidation() public liquidated {
+        // Get how much WETH the user lost
+        uint256 amountLiquidated = engine.getTokenAmountFromUsd(weth, DSC_AMOUNT_TO_MINT)
+            + (engine.getTokenAmountFromUsd(weth, DSC_AMOUNT_TO_MINT) / engine.getLiquidationBonus()); 
+            //5.55555555556 + (5.55555555556 * 0.1) = 6.11111111111 ETH
+        console.log("amountLiquidated: ", amountLiquidated); //6111111111111111110
+        //what happens when the collateral is not even worth the debt and 
+        //as such not even enough to have a bonus for the 
+        
+
+        uint256 usdAmountLiquidated = engine.getUsdValue(weth, amountLiquidated); //$55
+        console.log("usdAmountLiquidated: ",usdAmountLiquidated); //54999999999999999990
+        uint256 expectedUserCollateralValueInUsd = engine.getUsdValue(weth, AMOUNT_COLLATERAL) - (usdAmountLiquidated); //$90 - $55 = $35
+        console.log("expectedUserCollateralValueInUsd: ", expectedUserCollateralValueInUsd); //$35 000000000000000010
+
+        (, uint256 userCollateralValueInUsd) = engine.getAccountInformation(Alice); //$35.000000000000000010
+        console.log("userCollateralValueInUsd: ",userCollateralValueInUsd); //35000000000000000010
+        uint256 hardCodedExpectedValue = 35000000000000000010; //$35
+        assertEq(userCollateralValueInUsd, expectedUserCollateralValueInUsd);
+        assertEq(userCollateralValueInUsd, hardCodedExpectedValue);
+    }
+    
     ///////////////////////////////////
     // View & Pure Function Tests //
     //////////////////////////////////

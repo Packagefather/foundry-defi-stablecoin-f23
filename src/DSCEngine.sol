@@ -480,6 +480,8 @@ function _getUsdValue(address token, uint256 amount) private view returns (uint2
         private
     {
         s_collateralDeposited[from][tokenCollateralAddress] -= amountCollateral;
+        //we should test this line for when liquidator tries to pay more than the user owes, 
+        //in other words the collateral is not enough to pay the liquidator + bonus
         emit CollateralRedeemed(from, to, tokenCollateralAddress, amountCollateral);
         
         bool success = IERC20(tokenCollateralAddress).transfer(to, amountCollateral);
