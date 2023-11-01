@@ -8,3 +8,4 @@ We want to make a stablecoin that is:
 3. Collateral: Exogenous (Crypto)
     a. wETH
     b. wBTC
+
