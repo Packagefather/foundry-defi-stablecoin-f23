@@ -39,14 +39,16 @@ contract Invariants is StdInvariant, Test{
         (, , weth, wbtc,) = helperConfig
             .activeNetworkConfig();
         handler = new Handler(dsce, dsc);
+        //this tells the invariant to call all types of function in our dsce or in the handler as the case may be
         //targetContract(address(dsce));
-        targetContract(address(handler));
+        targetContract(address(handler)); 
         //hey, don't call redeemCollateral, unless there is collateral to redeem
 
         
         }
         // forge-config: default.invariant.fail-on-revert = true
         function invariant_protocolMustHaveMoreValueThanTotalSupply() public view{
+            console.log("hello");
             //get the value of all the collateral in the protocol
             //compare it to all the debt (DSC)
             uint256 totalSupply = dsc.totalSupply();

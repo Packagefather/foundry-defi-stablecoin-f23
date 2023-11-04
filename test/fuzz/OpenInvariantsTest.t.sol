@@ -11,6 +11,7 @@
 // pragma solidity ^0.8.18;
 
 // import {Test, console} from "forge-std/Test.sol";
+// //import {console} from "forge-std/console.sol";
 // import{StdInvariant} from "forge-std/StdInvariant.sol";
 // import {DSCEngine} from "../../../src/DSCEngine.sol";
 // import {DecentralizedStableCoin} from "../../src/DecentralizedStableCoin.sol";
@@ -59,6 +60,8 @@
 //             assert(wethValue + wbtcValue >= totalSupply);
             
 //         }
+//        //timestamp: 3:41
+
 
 
 // }
